@@ -9,40 +9,28 @@ import random
 
 from model import Model
 
+FLAGS = tf.app.flags.FLAGS
 
-# cmd line params
-def print_usage():
-    print("Usage:")
-    print(sys.argv[0] + "<vocabulary size> <code size> train")
-    print(sys.argv[0] + "<vocabulary size> <code size> test <checkpoint file>")
-    sys.exit(1)
+tf.app.flags.DEFINE_integer('steps', 100000, 'Number of steps until stop')
+tf.app.flags.DEFINE_integer('batch_size', 50, 'Number of examples in mini-batch')
 
-if True or len(sys.argv) == 1:
-    num_syms = 10
-    code_width = 10
-elif len(sys.argv) < 4:
-    print_usage()
-else:
-    num_syms = int(sys.argv[1])
-    code_width = int(sys.argv[2])
+tf.app.flags.DEFINE_integer('num_symbols', 10, 'Atomic symbols number')
+tf.app.flags.DEFINE_integer('code_width', 5, 'Number of embedding dimensions')
+tf.app.flags.DEFINE_integer('seq_len', 3, 'Maximal length of symbol sequences to learn')
 
-batch_size = 50
-seq_sz = 3
+# Model
+model = Model(num_symbols=FLAGS.num_symbols, code_width=FLAGS.code_width)
+
+# some constants and initialization
+f32 = tf.float32
+eps = 1e-6
+experiment = "exp-voc" + str(FLAGS.num_symbols) + "-code" + str(FLAGS.code_width) + "-seq" + str(FLAGS.seq_len)
 
 
 def ensure_dir(d):
     """Creates dir if it doesn't exist"""
     if not os.path.exists(d):
         os.makedirs(d)
-
-
-model = Model(num_syms=num_syms, code_width=code_width)
-
-# some constants and initialization
-eps = 1e-6
-experiment = "exp-voc" + str(num_syms) + "-code" + str(code_width) + "-seq" + str(seq_sz)
-
-f32 = tf.float32
 
 
 def sym_list(list_len, different=False):
@@ -86,18 +74,20 @@ def seq_decoder(seq_code, seq_length):
 
 
 def do_train():
+    print('vocabulary {}, code_width {}, sequence_len {}'.format(FLAGS.num_symbols, FLAGS.code_width, FLAGS.seq_len))
+
     ensure_dir('checkpoints')
     ensure_dir('logs')
 
     # training equations (for tuple)
-    ids = tf.placeholder(f32, [None, seq_sz, model.sym_width])
+    ids = tf.placeholder(f32, [None, FLAGS.seq_len, model.sym_width]) # Batch x Seq x SymWidth
     ids_2d = tf.reshape(ids, [-1, model.sym_width])
-    sym_codes = tf.reshape(model.embed(ids_2d), [-1, seq_sz, model.code_width])
+    sym_codes = tf.reshape(model.embed(ids_2d), [-1, FLAGS.seq_len, model.code_width]) # Batch x Seq x Code
 
     seqs = tf.transpose(sym_codes, perm=[1, 0, 2])  # Seq x Batch x Code
     seq_list = tf.unpack(seqs)
     code, tup_codes = seq_coder(seq_list)
-    rev_seqs, rev_tup_codes = seq_decoder(code, seq_sz)
+    rev_seqs, rev_tup_codes = seq_decoder(code, FLAGS.seq_len)
     seq_sqr_dist = tf.squared_difference(seqs, rev_seqs)
     tup_sqr_dist = tf.squared_difference(tup_codes, rev_tup_codes)
     seq_loss = tf.reduce_mean(seq_sqr_dist)
@@ -123,7 +113,7 @@ def do_train():
 
     # final loss, step and loop
     full_loss = seq_loss + tup_loss + code_loss  #  + det_cross_ent
-    step = tf.train.MomentumOptimizer(0.01, 0.1).minimize(full_loss)
+    step = tf.train.MomentumOptimizer(0.01, 0.5).minimize(full_loss)
 
     experiment_date = experiment + "-" + strftime("%Y-%m-%d-%H%M%S", localtime())
     writer = tf.summary.FileWriter("logs/" + experiment_date, flush_secs=5)
@@ -131,10 +121,11 @@ def do_train():
 
     with tf.Session() as sess:
         tf.global_variables_initializer().run()
+        writer.add_graph(sess.graph)
         k = None
-        for i in range(100000):
+        for i in range(FLAGS.steps):
             k = i
-            ids_v = sym_list_batch(seq_sz, batch_size, False)
+            ids_v = sym_list_batch(FLAGS.seq_len, FLAGS.batch_size, False)
             diff_ids_v = sym_list_batch(pair_sz, model.num_syms, True)
 
             _, bin_logs, logs = sess.run([step, summaries, (
@@ -263,10 +254,8 @@ def do_test(snapshot):
             print('confidence_neg', confidence_neg / (tries - successes1))
 
 
-if __name__ != '__main__':
-    print('doing nothing, runned in', sys.argv[0])
-if len(sys.argv) == 1 or sys.argv[3] == 'train':
-    do_train()
-elif sys.argv[3] == 'test':
-    checkpoint = sys.argv[4]
-    do_test(checkpoint)
+do_train()
+
+#elif sys.argv[3] == 'test':
+#    checkpoint = sys.argv[4]
+#    do_test(checkpoint)

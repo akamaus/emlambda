@@ -6,12 +6,12 @@ class Model:
     """A model for learning symbol-hierarchy embedding.
     Symbols initially represented as one-hot rows (of size sym_width)
     which got embedded into Code vector-space (rows of size code_width)"""
-    def __init__(self, num_syms, code_width):
+    def __init__(self, num_symbols, code_width):
         self.code_width = code_width
-        self.num_syms = num_syms
-        self.sym_width = num_syms
+        self.num_syms = num_symbols
+        self.sym_width = num_symbols
         # symbol tables
-        self.symbols = [i for i in range(1, num_syms + 1)]
+        self.symbols = [i for i in range(1, num_symbols + 1)]
         self.sym_dict = {}
 
         for i, c in enumerate(self.symbols):
@@ -19,7 +19,7 @@ class Model:
             self.sym_dict[c][i] = 1
 
         # embeds symbol
-        self.Coder = Model.matrix([num_syms, code_width])
+        self.Coder = Model.matrix([num_symbols, code_width])
         self.EmptyCode = Model.matrix([code_width])
         # merges two embeddings to produce a tuple
         self.Tuple = Model.matrix([code_width * 2, code_width])
