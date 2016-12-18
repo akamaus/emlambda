@@ -17,45 +17,72 @@ def print_usage():
     print(sys.argv[0] + "<vocabulary size> <code size> test <checkpoint file>")
     sys.exit(1)
 
-if len(sys.argv) == 1:
+if True or len(sys.argv) == 1:
     num_syms = 10
-    code_width = 3
+    code_width = 10
 elif len(sys.argv) < 4:
     print_usage()
 else:
     num_syms = int(sys.argv[1])
     code_width = int(sys.argv[2])
 
+batch_size = 50
+seq_sz = 3
+
+
+def ensure_dir(d):
+    """Creates dir if it doesn't exist"""
+    if not os.path.exists(d):
+        os.makedirs(d)
+
+
 model = Model(num_syms=num_syms, code_width=code_width)
 
 # some constants and initialization
 eps = 1e-6
-experiment = "exp-voc" + str(num_syms) + "-code" + str(code_width)
+experiment = "exp-voc" + str(num_syms) + "-code" + str(code_width) + "-seq" + str(seq_sz)
 
-batch_size = 100
 f32 = tf.float32
 
 
-def id_pair(different):
+def sym_list(list_len, different=False):
+    """Generates a list of identifiers (to be used, for example to combine into single code)"""
     if different:
-        a,b = random.sample(model.symbols,2)
+        lst = random.sample(model.symbols, list_len)
     else:
-        a = random.choice(model.symbols)
-        b = random.choice(model.symbols)
-    return model.sym_dict[a], model.sym_dict[b]
+        lst = [random.choice(model.symbols) for x in range(list_len)]
+    return model.one_hot(lst)
 
 
-def id_pairs(batch, different):
-    pairs = [id_pair(different) for x in range(batch)]
-    t_pairs = list(zip(*pairs))
-    ids1_v = np.transpose(t_pairs[0])
-    ids2_v = np.transpose(t_pairs[1])
-    return ids1_v, ids2_v
+def sym_list_batch(list_len, batch, different=False):
+    """Generates a batch of identifier sequence"""
+    batch = [list(sym_list(list_len, different)) for x in range(batch)]
+    return batch
 
 
-def ensure_dir(d):
-    if not os.path.exists(d):
-        os.makedirs(d)
+def seq_coder(symbol_codes):
+    """Takes list of codes representing symbol-code sequence
+    folds it into a single code. Returns summary code and list of accumulated results"""
+    tuples = []
+    b = tf.shape(symbol_codes[0])[0]
+    c = tf.tile(tf.expand_dims(model.empty_code(), axis=0), [b, 1])
+    for ci in symbol_codes:
+        tuples.append(c)
+        c = model.tuple(c,ci)
+    return c, tuples
+
+
+def seq_decoder(seq_code, seq_length):
+    """Takes a code representing symbol sequence and unfolds it"""
+    tuples = []
+    symbols = []
+    for i in range(seq_length):
+        seq_code,symbol = model.untuple(seq_code)
+        tuples.append(seq_code)
+        symbols.append(symbol)
+    tuples.reverse()
+    symbols.reverse()
+    return symbols, tuples
 
 
 def do_train():
@@ -63,10 +90,76 @@ def do_train():
     ensure_dir('logs')
 
     # training equations (for tuple)
-    ids = tf.placeholder(f32, [2, model.sym_width, None])
+    ids = tf.placeholder(f32, [None, seq_sz, model.sym_width])
+    ids_2d = tf.reshape(ids, [-1, model.sym_width])
+    sym_codes = tf.reshape(model.embed(ids_2d), [-1, seq_sz, model.code_width])
 
+    seqs = tf.transpose(sym_codes, perm=[1, 0, 2])  # Seq x Batch x Code
+    seq_list = tf.unpack(seqs)
+    code, tup_codes = seq_coder(seq_list)
+    rev_seqs, rev_tup_codes = seq_decoder(code, seq_sz)
+    seq_sqr_dist = tf.squared_difference(seqs, rev_seqs)
+    tup_sqr_dist = tf.squared_difference(tup_codes, rev_tup_codes)
+    seq_loss = tf.reduce_mean(seq_sqr_dist)
+    tup_loss = tf.reduce_mean(tup_sqr_dist)
+    tf.summary.scalar('seq_loss', seq_loss)
+    tf.summary.scalar('tup_loss', tup_loss)
+    tup_max = tf.sqrt(tf.reduce_max(tup_sqr_dist))
+    seq_max = tf.sqrt(tf.reduce_max(seq_sqr_dist))
+    tf.summary.scalar('seq_max', seq_max)
+    tf.summary.scalar('tup_max', tup_max)
+
+    # for coder
+    pair_sz = 2
+    diff_ids = tf.placeholder(f32, [None, pair_sz, model.sym_width])
+    diff_codes = tf.reshape(model.embed(one_hot=tf.reshape(diff_ids, [-1, model.sym_width])), [-1, pair_sz, model.code_width])
+    diff_pairs = tf.transpose(diff_codes, perm=[1,0,2])
+    diff_cs = tf.unpack(diff_pairs)
+    code_dist = tf.reduce_sum(tf.squared_difference(diff_cs[0], diff_cs[1]), 1)
+    code_loss = tf.reduce_mean(1 / code_dist)
+    tf.summary.scalar('code_loss', code_loss)
+    code_min = tf.reduce_min(code_dist)
+    tf.summary.scalar('code_min', code_min)
+
+    # final loss, step and loop
+    full_loss = seq_loss + tup_loss + code_loss  #  + det_cross_ent
+    step = tf.train.MomentumOptimizer(0.01, 0.1).minimize(full_loss)
+
+    experiment_date = experiment + "-" + strftime("%Y-%m-%d-%H%M%S", localtime())
+    writer = tf.summary.FileWriter("logs/" + experiment_date, flush_secs=5)
+    summaries = tf.summary.merge_all()
+
+    with tf.Session() as sess:
+        tf.global_variables_initializer().run()
+        k = None
+        for i in range(100000):
+            k = i
+            ids_v = sym_list_batch(seq_sz, batch_size, False)
+            diff_ids_v = sym_list_batch(pair_sz, model.num_syms, True)
+
+            _, bin_logs, logs = sess.run([step, summaries, (
+            (seq_max, tup_max, code_min), (seq_loss, tup_loss, code_loss))],  # (det_cs1_acc, det_tups_acc, det_cross_ent)
+                                         feed_dict={
+                                             ids: ids_v,
+                                             diff_ids: diff_ids_v
+                                         })
+            mlogs = logs[0]
+            if mlogs[0] < eps and mlogs[1] < eps and mlogs[2] > 0.5:
+                print("early stopping")
+                break
+
+            if i % 100 == 0:
+                writer.add_summary(bin_logs, i)
+                print(i, logs)
+
+            if i % 1000 == 0:
+                model.net_saver.save(sess, "checkpoints/" + experiment_date, global_step=k)
+        model.net_saver.save(sess, "checkpoints/" + experiment_date, global_step=k)
+
+
+def rest():
     cs = tf.matmul(model.Coder, tf.reshape(ids, [model.sym_width, -1] ))
-    cs_lst = tf.split(1,2,cs)
+    cs_lst = tf.split(1, 2, cs)
     print(tf.shape(ids))
     print(tf.shape(cs))
     print(tf.shape(cs_lst[0]))
@@ -114,37 +207,6 @@ def do_train():
     code_min = tf.reduce_min(code_sqrt)
     tf.summary.scalar('code_min', code_min)
 
-    full_loss = cs1_loss + cs2_loss + code_loss + det_cross_ent
-    step = tf.train.MomentumOptimizer(0.01, 0.1).minimize(full_loss)
-
-    experiment_date = experiment + "-" + strftime("%Y-%m-%d-%H%M%S", localtime())
-    writer = tf.summary.FileWriter("logs/" + experiment_date, flush_secs=5)
-    summaries = tf.summary.merge_all()
-
-    with tf.Session() as sess:
-        tf.global_variables_initializer().run()
-        k = None
-        for i in range(100000-1):
-            k = i
-            ids1_v, ids2_v = id_pairs(batch_size, False)
-            diff_ids1_v, diff_ids2_v = id_pairs(num_syms, True)
-
-            _, bin_logs, logs = sess.run([step, summaries, ((cs1_max, cs2_max, code_min), (cs1_loss, cs2_loss, code_loss), (det_cs1_acc, det_tups_acc, det_cross_ent))], feed_dict = {
-                ids: [ids1_v, ids2_v],
-                diff_ids1: diff_ids1_v, diff_ids2: diff_ids2_v
-            })
-            mlogs = logs[0]
-            if mlogs[0] < eps and mlogs[1] < eps and mlogs[2] > 0.5:
-                print("early stopping")
-                break
-
-            if i % 100 == 0:
-                writer.add_summary(bin_logs, i)
-                print(i, logs)
-
-            if i % 1000 == 0:
-                model.net_saver.save(sess, "checkpoints/" + experiment_date, global_step = k)
-        model.net_saver.save(sess, "checkpoints/" + experiment_date, global_step = k)
 
 ntop = 5
 tries = 10
@@ -201,8 +263,8 @@ def do_test(snapshot):
             print('confidence_neg', confidence_neg / (tries - successes1))
 
 
-
-
+if __name__ != '__main__':
+    print('doing nothing, runned in', sys.argv[0])
 if len(sys.argv) == 1 or sys.argv[3] == 'train':
     do_train()
 elif sys.argv[3] == 'test':
