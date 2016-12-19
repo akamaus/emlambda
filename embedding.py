@@ -80,8 +80,8 @@ def do_train():
     ensure_dir('logs')
 
     # training equations (for tuple)
-    ids = tf.placeholder(f32, [None, FLAGS.seq_len, model.sym_width]) # Batch x Seq x SymWidth
-    ids_2d = tf.reshape(ids, [-1, model.sym_width])
+    p_ids = tf.placeholder(f32, [None, FLAGS.seq_len, model.sym_width]) # Batch x Seq x SymWidth
+    ids_2d = tf.reshape(p_ids, [-1, model.sym_width])
     sym_codes = tf.reshape(model.embed(ids_2d), [-1, FLAGS.seq_len, model.code_width]) # Batch x Seq x Code
 
     seqs = tf.transpose(sym_codes, perm=[1, 0, 2])  # Seq x Batch x Code
@@ -101,8 +101,8 @@ def do_train():
 
     # for coder
     pair_sz = 2
-    diff_ids = tf.placeholder(f32, [None, pair_sz, model.sym_width])
-    diff_codes = tf.reshape(model.embed(one_hot=tf.reshape(diff_ids, [-1, model.sym_width])), [-1, pair_sz, model.code_width])
+    p_diff_ids = tf.placeholder(f32, [None, pair_sz, model.sym_width])
+    diff_codes = tf.reshape(model.embed(one_hot=tf.reshape(p_diff_ids, [-1, model.sym_width])), [-1, pair_sz, model.code_width])
     diff_pairs = tf.transpose(diff_codes, perm=[1,0,2])
     diff_cs = tf.unpack(diff_pairs)
     code_dist = tf.reduce_sum(tf.squared_difference(diff_cs[0], diff_cs[1]), 1)
@@ -110,6 +110,19 @@ def do_train():
     tf.summary.scalar('code_loss', code_loss)
     code_min = tf.reduce_min(code_dist)
     tf.summary.scalar('code_min', code_min)
+
+    # restoration accuracy
+    p_all_ids = tf.placeholder(f32, [model.sym_width, model.num_syms])
+    all_codes = model.embed(p_all_ids)
+
+    seq1 = tf.slice(seqs, [0, 0, 0], [-1, 1, -1])
+    dists1 = tf.reduce_sum(tf.squared_difference(seq1, all_codes), 2)
+    ids1 = tf.arg_min(dists1, 1)
+
+    rev_seq1 = tf.slice(rev_seqs, [0, 0, 0],[-1, 1, -1])
+    rev_dists1 = tf.reduce_sum(tf.squared_difference(rev_seq1, all_codes), 2)
+    rev_ids1 = tf.arg_min(rev_dists1, 1)
+    restored_ok = tf.reduce_all(tf.equal(ids1, rev_ids1))
 
     # final loss, step and loop
     full_loss = seq_loss + tup_loss + code_loss  #  + det_cross_ent
@@ -123,25 +136,33 @@ def do_train():
         tf.global_variables_initializer().run()
         writer.add_graph(sess.graph)
         k = None
+        num_restored_ok = 0
+
+        all_ids_v = list(model.one_hot(model.symbols))
+
         for i in range(FLAGS.steps):
             k = i
             ids_v = sym_list_batch(FLAGS.seq_len, FLAGS.batch_size, False)
             diff_ids_v = sym_list_batch(pair_sz, model.num_syms, True)
 
-            _, bin_logs, logs = sess.run([step, summaries, (
-            (seq_max, tup_max, code_min), (seq_loss, tup_loss, code_loss))],  # (det_cs1_acc, det_tups_acc, det_cross_ent)
+            _, bin_logs, logs, v_restored_ok = sess.run([step, summaries,
+            ((seq_max, tup_max, code_min), (seq_loss, tup_loss, code_loss)), restored_ok],  # (det_cs1_acc, det_tups_acc, det_cross_ent)
                                          feed_dict={
-                                             ids: ids_v,
-                                             diff_ids: diff_ids_v
+                                             p_ids: ids_v,
+                                             p_diff_ids: diff_ids_v,
+                                             p_all_ids: all_ids_v
                                          })
             mlogs = logs[0]
+            if v_restored_ok:
+                num_restored_ok += 1
             if mlogs[0] < eps and mlogs[1] < eps and mlogs[2] > 0.5:
                 print("early stopping")
                 break
 
             if i % 100 == 0:
                 writer.add_summary(bin_logs, i)
-                print(i, logs)
+                print(i, num_restored_ok, logs)
+                num_restored_ok = 0
 
             if i % 1000 == 0:
                 model.net_saver.save(sess, "checkpoints/" + experiment_date, global_step=k)
@@ -255,7 +276,6 @@ def do_test(snapshot):
 
 
 do_train()
-
 #elif sys.argv[3] == 'test':
 #    checkpoint = sys.argv[4]
 #    do_test(checkpoint)
