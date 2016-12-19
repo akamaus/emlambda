@@ -2,7 +2,6 @@
 from time import localtime, strftime
 
 import os
-import sys
 import tensorflow as tf
 import numpy as np
 import random
@@ -115,17 +114,20 @@ def do_train():
     p_all_ids = tf.placeholder(f32, [model.sym_width, model.num_syms])
     all_codes = model.embed(p_all_ids)
 
-    seq1 = tf.slice(seqs, [0, 0, 0], [-1, 1, -1])
-    dists1 = tf.reduce_sum(tf.squared_difference(seq1, all_codes), 2)
-    ids1 = tf.arg_min(dists1, 1)
+    def codes_to_ids(codes):
+        codes_1 = tf.expand_dims(codes, 2)
+        dists = tf.reduce_sum(tf.squared_difference(codes_1, all_codes), 3)
+        ids = tf.arg_min(dists, 2)
+        return ids
 
-    rev_seq1 = tf.slice(rev_seqs, [0, 0, 0],[-1, 1, -1])
-    rev_dists1 = tf.reduce_sum(tf.squared_difference(rev_seq1, all_codes), 2)
-    rev_ids1 = tf.arg_min(rev_dists1, 1)
-    restored_ok = tf.reduce_all(tf.equal(ids1, rev_ids1))
+    orig_ids = codes_to_ids(seqs)
+    rev_ids = codes_to_ids(rev_seqs)
+
+    num_restored_ok = tf.reduce_sum(tf.cast(tf.reduce_all(tf.equal(orig_ids, rev_ids), 0), dtype=tf.int32))
+    tf.summary.scalar('restored_ok', num_restored_ok / FLAGS.batch_size)
 
     # final loss, step and loop
-    full_loss = seq_loss + tup_loss + code_loss  #  + det_cross_ent
+    full_loss = seq_loss + tup_loss + code_loss  ##+ det_cross_ent
     step = tf.train.MomentumOptimizer(0.01, 0.5).minimize(full_loss)
 
     experiment_date = experiment + "-" + strftime("%Y-%m-%d-%H%M%S", localtime())
@@ -136,7 +138,6 @@ def do_train():
         tf.global_variables_initializer().run()
         writer.add_graph(sess.graph)
         k = None
-        num_restored_ok = 0
 
         all_ids_v = list(model.one_hot(model.symbols))
 
@@ -145,24 +146,22 @@ def do_train():
             ids_v = sym_list_batch(FLAGS.seq_len, FLAGS.batch_size, False)
             diff_ids_v = sym_list_batch(pair_sz, model.num_syms, True)
 
-            _, bin_logs, logs, v_restored_ok = sess.run([step, summaries,
-            ((seq_max, tup_max, code_min), (seq_loss, tup_loss, code_loss)), restored_ok],  # (det_cs1_acc, det_tups_acc, det_cross_ent)
+            _, bin_logs, logs, v_num_restored_ok = sess.run([step, summaries,
+            ((seq_max, tup_max, code_min), (seq_loss, tup_loss, code_loss)), num_restored_ok],  # (det_cs1_acc, det_tups_acc, det_cross_ent)
                                          feed_dict={
                                              p_ids: ids_v,
                                              p_diff_ids: diff_ids_v,
                                              p_all_ids: all_ids_v
                                          })
             mlogs = logs[0]
-            if v_restored_ok:
-                num_restored_ok += 1
+
             if mlogs[0] < eps and mlogs[1] < eps and mlogs[2] > 0.5:
                 print("early stopping")
                 break
 
             if i % 100 == 0:
                 writer.add_summary(bin_logs, i)
-                print(i, num_restored_ok, logs)
-                num_restored_ok = 0
+                print(i, v_num_restored_ok, logs)
 
             if i % 1000 == 0:
                 model.net_saver.save(sess, "checkpoints/" + experiment_date, global_step=k)
