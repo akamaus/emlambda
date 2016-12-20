@@ -123,8 +123,12 @@ def do_train():
     orig_ids = codes_to_ids(seqs)
     rev_ids = codes_to_ids(rev_seqs)
 
-    num_restored_ok = tf.reduce_sum(tf.cast(tf.reduce_all(tf.equal(orig_ids, rev_ids), 0), dtype=tf.int32))
-    tf.summary.scalar('restored_ok', num_restored_ok / FLAGS.batch_size)
+    num_restored = tf.reduce_sum(tf.cast(tf.equal(orig_ids, rev_ids), dtype=tf.float32), 0)
+
+    num_restored_hist = tf.histogram_fixed_width(num_restored, [0.0, model.num_syms+1.0], model.num_syms+1, dtype=tf.int32)
+    num_restored_ok = num_restored_hist
+    #tf.summary.scalar('restored_ok', num_restored_ok / FLAGS.batch_size)
+    tf.summary.histogram('num_restored', num_restored)
 
     # final loss, step and loop
     full_loss = seq_loss + tup_loss + code_loss  ##+ det_cross_ent
