@@ -123,11 +123,12 @@ def do_train():
     orig_ids = codes_to_ids(seqs)
     rev_ids = codes_to_ids(rev_seqs)
 
-    num_restored = tf.reduce_sum(tf.cast(tf.equal(orig_ids, rev_ids), dtype=tf.float32), 0)
+    restorations = tf.equal(orig_ids, rev_ids)
+    num_restored = tf.reduce_sum(tf.cast(restorations, dtype=tf.float32), 0)
+    elem_restoration_hist = tf.reduce_sum(tf.cast(restorations, dtype=tf.int32), 1)  # hist[i] is number of sequences with i-th element restored
+    restoration_hist = tf.histogram_fixed_width(num_restored,
+                                                [0.0, FLAGS.seq_len+1.0], FLAGS.seq_len+1, dtype=tf.int32)
 
-    num_restored_hist = tf.histogram_fixed_width(num_restored, [0.0, model.num_syms+1.0], model.num_syms+1, dtype=tf.int32)
-    num_restored_ok = num_restored_hist
-    #tf.summary.scalar('restored_ok', num_restored_ok / FLAGS.batch_size)
     tf.summary.histogram('num_restored', num_restored)
 
     # final loss, step and loop
@@ -150,8 +151,8 @@ def do_train():
             ids_v = sym_list_batch(FLAGS.seq_len, FLAGS.batch_size, False)
             diff_ids_v = sym_list_batch(pair_sz, model.num_syms, True)
 
-            _, bin_logs, logs, v_num_restored_ok = sess.run([step, summaries,
-            ((seq_max, tup_max, code_min), (seq_loss, tup_loss, code_loss)), num_restored_ok],  # (det_cs1_acc, det_tups_acc, det_cross_ent)
+            _, bin_logs, logs, restoration_stats = sess.run([step, summaries,
+            ((seq_max, tup_max, code_min), (seq_loss, tup_loss, code_loss)), (restoration_hist, elem_restoration_hist)],  # (det_cs1_acc, det_tups_acc, det_cross_ent)
                                          feed_dict={
                                              p_ids: ids_v,
                                              p_diff_ids: diff_ids_v,
@@ -165,7 +166,7 @@ def do_train():
 
             if i % 100 == 0:
                 writer.add_summary(bin_logs, i)
-                print(i, v_num_restored_ok, logs)
+                print(i, list(restoration_stats[0]), list(restoration_stats[1]), logs)
 
             if i % 1000 == 0:
                 model.net_saver.save(sess, "checkpoints/" + experiment_date, global_step=k)
