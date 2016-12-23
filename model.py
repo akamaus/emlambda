@@ -28,6 +28,10 @@ class Model:
         # detects if its a symbol or a Tuple
         self.TypeDetector = Model.matrix([code_width,2])
 
+        # morphisms
+        self.LR = Model.matrix([code_width, code_width])
+        self.RL = Model.matrix([code_width, code_width])
+
         tf.summary.histogram("Coder_weights", self.Coder)
         tf.summary.histogram("Tuple_weights", self.Tuple)
         tf.summary.histogram("UnTuple_weights", self.UnTuple)
@@ -60,6 +64,12 @@ class Model:
         """Splits tuple code into two subcomponents"""
         res = tf.matmul(c, self.UnTuple)
         return tf.split(1, 2, res)
+
+    def left_to_right(self, c):
+        return tf.matmul(c, self.LR)
+
+    def right_to_left(self, c):
+        return tf.matmul(c, self.RL)
 
     @staticmethod
     def matrix(shape):

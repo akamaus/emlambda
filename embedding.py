@@ -108,20 +108,44 @@ def do_train():
     ids_2d = tf.reshape(p_ids, [-1, model.sym_width])
     sym_codes = tf.reshape(model.embed(ids_2d), [-1, FLAGS.seq_len, model.code_width]) # Batch x Seq x Code
 
+    # Left fold
     seqs = tf.transpose(sym_codes, perm=[1, 0, 2])  # Seq x Batch x Code
     seq_list = tf.unpack(seqs)
-    code, tup_codes = seq_coder_r(seq_list)
-    rev_seqs, rev_tup_codes = seq_decoder_r(code, FLAGS.seq_len)
-    seq_sqr_dist = tf.squared_difference(seqs, rev_seqs)
-    tup_sqr_dist = tf.squared_difference(tup_codes, rev_tup_codes)
-    seq_loss = tf.reduce_mean(seq_sqr_dist)
-    tup_loss = tf.reduce_mean(tup_sqr_dist)
-    tf.summary.scalar('seq_loss', seq_loss)
-    tf.summary.scalar('tup_loss', tup_loss)
-    tup_max = tf.sqrt(tf.reduce_max(tup_sqr_dist))
-    seq_max = tf.sqrt(tf.reduce_max(seq_sqr_dist))
-    tf.summary.scalar('seq_max', seq_max)
-    tf.summary.scalar('tup_max', tup_max)
+    code_l, tup_codes_l = seq_coder_l(seq_list)
+    rev_seqs, rev_tup_codes = seq_decoder_l(code_l, FLAGS.seq_len)
+    seq_sqr_dist_l = tf.squared_difference(seqs, rev_seqs)
+    tup_sqr_dist_l = tf.squared_difference(tup_codes_l, rev_tup_codes)
+    seq_loss_l = tf.reduce_mean(seq_sqr_dist_l)
+    tup_loss_l = tf.reduce_mean(tup_sqr_dist_l)
+    tf.summary.scalar('seq_loss_l', seq_loss_l)
+    tf.summary.scalar('tup_loss_l', tup_loss_l)
+    tup_max_l = tf.sqrt(tf.reduce_max(tup_sqr_dist_l))
+    seq_max_l = tf.sqrt(tf.reduce_max(seq_sqr_dist_l))
+    tf.summary.scalar('seq_max_l', seq_max_l)
+    tf.summary.scalar('tup_max_l', tup_max_l)
+
+    # Right fold
+    code_r, tup_codes_r = seq_coder_r(seq_list)
+    rev_seqs, rev_tup_codes = seq_decoder_l(code_r, FLAGS.seq_len)
+    seq_sqr_dist_r = tf.squared_difference(seqs, rev_seqs)
+    tup_sqr_dist_r = tf.squared_difference(tup_codes_r, rev_tup_codes)
+    seq_loss_r = tf.reduce_mean(seq_sqr_dist_r)
+    tup_loss_r = tf.reduce_mean(tup_sqr_dist_r)
+    tf.summary.scalar('seq_loss_r', seq_loss_r)
+    tf.summary.scalar('tup_loss_r', tup_loss_r)
+    tup_max_r = tf.sqrt(tf.reduce_max(tup_sqr_dist_r))
+    seq_max_r = tf.sqrt(tf.reduce_max(seq_sqr_dist_r))
+    tf.summary.scalar('seq_max_r', seq_max_r)
+    tf.summary.scalar('tup_max_r', tup_max_r)
+    
+    # Left-to right morphism
+    code_lr = model.left_to_right(code_l)
+    code_rl = model.right_to_left(code_r)
+
+    code_dist_lr_loss = tf.reduce_mean(tf.squared_difference(code_lr, code_r))
+    code_dist_rl_loss = tf.reduce_mean(tf.squared_difference(code_rl, code_l))
+   # tf.summary.scalar('code_dist_lr', code_dist_lr_loss)
+   # tf.summary.scalar('code_dist_rl', code_dist_rl_loss)
 
     # for coder
     pair_sz = 2
@@ -157,7 +181,7 @@ def do_train():
     tf.summary.histogram('num_restored', num_restored)
 
     # final loss, step and loop
-    full_loss = seq_loss + tup_loss + code_loss  ##+ det_cross_ent
+    full_loss = seq_loss_l + tup_loss_l + seq_loss_r + tup_loss_r + code_loss + code_dist_lr_loss + code_dist_rl_loss  ##+ det_cross_ent
     step = tf.train.MomentumOptimizer(0.01, 0.5).minimize(full_loss)
 
     experiment_date = experiment + "-" + strftime("%Y-%m-%d-%H%M%S", localtime())
@@ -178,7 +202,7 @@ def do_train():
             diff_ids_v = sym_list_batch(pair_sz, model.num_syms, True)
 
             _, bin_logs, logs, restoration_stats = sess.run([step, summaries,
-            ((seq_max, tup_max, code_min), (seq_loss, tup_loss, code_loss)), (restoration_hist, elem_restoration_hist)],  # (det_cs1_acc, det_tups_acc, det_cross_ent)
+            ((seq_max_l, tup_max_l, code_min), (seq_max_r, tup_max_r),  (seq_loss_l, tup_loss_l, code_loss, code_dist_lr_loss, code_dist_rl_loss)), (restoration_hist, elem_restoration_hist)],  # (det_cs1_acc, det_tups_acc, det_cross_ent)
                                          feed_dict={
                                              p_ids: ids_v,
                                              p_diff_ids: diff_ids_v,
