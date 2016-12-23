@@ -143,6 +143,7 @@ def do_train():
         tf.global_variables_initializer().run()
         writer.add_graph(sess.graph)
         k = None
+        all_perfect = 0
 
         all_ids_v = list(model.one_hot(model.symbols))
 
@@ -160,7 +161,12 @@ def do_train():
                                          })
             mlogs = logs[0]
 
-            if mlogs[0] < eps and mlogs[1] < eps and mlogs[2] > 0.5:
+            if restoration_stats[0][FLAGS.seq_len] == FLAGS.batch_size:
+                all_perfect += 1
+            else:
+                all_perfect = 0
+
+            if mlogs[0] < eps and mlogs[1] < eps and mlogs[2] > 0.5 or all_perfect >= 10000:
                 print("early stopping")
                 break
 
