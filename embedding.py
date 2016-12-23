@@ -47,7 +47,7 @@ def sym_list_batch(list_len, batch, different=False):
     return batch
 
 
-def seq_coder(symbol_codes):
+def seq_coder_l(symbol_codes):
     """Takes list of codes representing symbol-code sequence
     folds it into a single code. Returns summary code and list of accumulated results"""
     tuples = []
@@ -59,7 +59,7 @@ def seq_coder(symbol_codes):
     return c, tuples
 
 
-def seq_decoder(seq_code, seq_length):
+def seq_decoder_l(seq_code, seq_length):
     """Takes a code representing symbol sequence and unfolds it"""
     tuples = []
     symbols = []
@@ -69,6 +69,31 @@ def seq_decoder(seq_code, seq_length):
         symbols.append(symbol)
     tuples.reverse()
     symbols.reverse()
+    return symbols, tuples
+
+
+def seq_coder_r(symbol_codes):
+    """Foldr. Returns summary code and list of accumulated results"""
+    tuples = []
+    b = tf.shape(symbol_codes[0])[0]
+    c = tf.tile(tf.expand_dims(model.empty_code(), axis=0), [b, 1])
+    cs = list(symbol_codes)
+    cs.reverse()
+    for ci in cs:
+        tuples.append(c)
+        c = model.tuple(ci,c)
+    return c, tuples
+
+
+def seq_decoder_r(seq_code, seq_length):
+    """Unflodr. Takes a code representing symbol sequence and unfolds it"""
+    tuples = []
+    symbols = []
+    for i in range(seq_length):
+        symbol, seq_code = model.untuple(seq_code)
+        tuples.append(seq_code)
+        symbols.append(symbol)
+    tuples.reverse()
     return symbols, tuples
 
 
@@ -85,8 +110,8 @@ def do_train():
 
     seqs = tf.transpose(sym_codes, perm=[1, 0, 2])  # Seq x Batch x Code
     seq_list = tf.unpack(seqs)
-    code, tup_codes = seq_coder(seq_list)
-    rev_seqs, rev_tup_codes = seq_decoder(code, FLAGS.seq_len)
+    code, tup_codes = seq_coder_r(seq_list)
+    rev_seqs, rev_tup_codes = seq_decoder_r(code, FLAGS.seq_len)
     seq_sqr_dist = tf.squared_difference(seqs, rev_seqs)
     tup_sqr_dist = tf.squared_difference(tup_codes, rev_tup_codes)
     seq_loss = tf.reduce_mean(seq_sqr_dist)
