@@ -104,40 +104,44 @@ def do_train():
     ensure_dir('logs')
 
     # training equations (for tuple)
-    p_ids = tf.placeholder(f32, [None, FLAGS.seq_len, model.sym_width]) # Batch x Seq x SymWidth
+    p_ids = tf.placeholder(f32, [None, FLAGS.seq_len, model.sym_width])  # Batch x Seq x SymWidth
     ids_2d = tf.reshape(p_ids, [-1, model.sym_width])
-    sym_codes = tf.reshape(model.embed(ids_2d), [-1, FLAGS.seq_len, model.code_width]) # Batch x Seq x Code
+    sym_codes = tf.reshape(model.embed(ids_2d), [-1, FLAGS.seq_len, model.code_width])  # Batch x Seq x Code
 
     # Left fold
     seqs = tf.transpose(sym_codes, perm=[1, 0, 2])  # Seq x Batch x Code
     seq_list = tf.unpack(seqs)
-    code_l, tup_codes_l = seq_coder_l(seq_list)
-    rev_seqs, rev_tup_codes = seq_decoder_l(code_l, FLAGS.seq_len)
-    seq_sqr_dist_l = tf.squared_difference(seqs, rev_seqs)
-    tup_sqr_dist_l = tf.squared_difference(tup_codes_l, rev_tup_codes)
-    seq_loss_l = tf.reduce_mean(seq_sqr_dist_l)
-    tup_loss_l = tf.reduce_mean(tup_sqr_dist_l)
-    tf.summary.scalar('seq_loss_l', seq_loss_l)
-    tf.summary.scalar('tup_loss_l', tup_loss_l)
-    tup_max_l = tf.sqrt(tf.reduce_max(tup_sqr_dist_l))
-    seq_max_l = tf.sqrt(tf.reduce_max(seq_sqr_dist_l))
-    tf.summary.scalar('seq_max_l', seq_max_l)
-    tf.summary.scalar('tup_max_l', tup_max_l)
 
-    # Right fold
-    code_r, tup_codes_r = seq_coder_r(seq_list)
-    rev_seqs, rev_tup_codes = seq_decoder_r(code_r, FLAGS.seq_len)
-    seq_sqr_dist_r = tf.squared_difference(seqs, rev_seqs)
-    tup_sqr_dist_r = tf.squared_difference(tup_codes_r, rev_tup_codes)
-    seq_loss_r = tf.reduce_mean(seq_sqr_dist_r)
-    tup_loss_r = tf.reduce_mean(tup_sqr_dist_r)
-    tf.summary.scalar('seq_loss_r', seq_loss_r)
-    tf.summary.scalar('tup_loss_r', tup_loss_r)
-    tup_max_r = tf.sqrt(tf.reduce_max(tup_sqr_dist_r))
-    seq_max_r = tf.sqrt(tf.reduce_max(seq_sqr_dist_r))
-    tf.summary.scalar('seq_max_r', seq_max_r)
-    tf.summary.scalar('tup_max_r', tup_max_r)
-    
+    def learn_fold(direction):
+        if direction == 'Left':
+            params = {'coder': seq_coder_l,
+                      'decoder': seq_decoder_l,
+                      'suffix': '_l'}
+        elif direction == 'Right':
+            params = {'coder': seq_coder_r,
+                      'decoder': seq_decoder_r,
+                      'suffix': '_r'}
+        else: 
+            raise Exception('unknown dir')
+
+        code, tup_codes = params['coder'](seq_list)
+        rev_seqs, rev_tup_codes = params['decoder'](code, FLAGS.seq_len)
+        seq_sqr_dist = tf.squared_difference(seqs, rev_seqs)
+        tup_sqr_dist = tf.squared_difference(tup_codes, rev_tup_codes)
+        seq_loss = tf.reduce_mean(seq_sqr_dist)
+        tup_loss = tf.reduce_mean(tup_sqr_dist)
+        tf.summary.scalar('seq_loss' + params['suffix'], seq_loss)
+        tf.summary.scalar('tup_loss' + params['suffix'], tup_loss)
+        tup_max = tf.sqrt(tf.reduce_max(tup_sqr_dist))
+        seq_max = tf.sqrt(tf.reduce_max(seq_sqr_dist))
+        tf.summary.scalar('seq_max' + params['suffix'], seq_max)
+        tf.summary.scalar('tup_max' + params['suffix'], tup_max)
+        return code, seq_max, tup_max, seq_loss, tup_loss, seqs, rev_seqs
+
+    # Folds
+    code_l, seq_max_l, tup_max_l, seq_loss_l, tup_loss_l, seqs, rev_seqs = learn_fold('Left')
+    code_r, seq_max_r, tup_max_r, seq_loss_r, tup_loss_r, _, _ = learn_fold('Right')
+
     # Left-to right morphism
     code_lr = model.left_to_right(code_l)
     code_rl = model.right_to_left(code_r)
@@ -150,8 +154,9 @@ def do_train():
     # for coder
     pair_sz = 2
     p_diff_ids = tf.placeholder(f32, [None, pair_sz, model.sym_width])
-    diff_codes = tf.reshape(model.embed(one_hot=tf.reshape(p_diff_ids, [-1, model.sym_width])), [-1, pair_sz, model.code_width])
-    diff_pairs = tf.transpose(diff_codes, perm=[1,0,2])
+    diff_codes = tf.reshape(model.embed(one_hot=tf.reshape(p_diff_ids, [-1, model.sym_width])),
+                            [-1, pair_sz, model.code_width])
+    diff_pairs = tf.transpose(diff_codes, perm=[1, 0, 2])
     diff_cs = tf.unpack(diff_pairs)
     code_dist = tf.reduce_sum(tf.squared_difference(diff_cs[0], diff_cs[1]), 1)
     code_loss = tf.reduce_mean(1 / code_dist)
@@ -174,8 +179,10 @@ def do_train():
 
     restorations = tf.equal(orig_ids, rev_ids)
     num_restored = tf.reduce_sum(tf.cast(restorations, dtype=tf.float32), 0)
-    elem_restoration_hist = tf.reduce_sum(tf.cast(restorations, dtype=tf.int32), 1)  # hist[i] is number of sequences with i-th element restored
-    restoration_hist = tf.histogram_fixed_width(num_restored,
+    # stats[i] is number of sequences with i-th element restored
+    elem_restoration_stats = tf.reduce_sum(tf.cast(restorations, dtype=tf.int32), 1)
+    # hist[i] - is number of sequences with i properly restored elements
+    num_proper_restorations_hist = tf.histogram_fixed_width(num_restored,
                                                 [0.0, FLAGS.seq_len+1.0], FLAGS.seq_len+1, dtype=tf.int32)
 
     tf.summary.histogram('num_restored', num_restored)
@@ -202,7 +209,9 @@ def do_train():
             diff_ids_v = sym_list_batch(pair_sz, model.num_syms, True)
 
             _, bin_logs, logs, restoration_stats = sess.run([step, summaries,
-            ((seq_max_l, tup_max_l, code_min), (seq_max_r, tup_max_r), (seq_loss_l, tup_loss_l, code_loss, code_dist_lr_loss, code_dist_rl_loss)), (restoration_hist, elem_restoration_hist)],  # (det_cs1_acc, det_tups_acc, det_cross_ent)
+            ((seq_max_l, tup_max_l, code_min), (seq_max_r, tup_max_r),
+             (seq_loss_l, tup_loss_l, code_loss, code_dist_lr_loss, code_dist_rl_loss)),
+             (num_proper_restorations_hist, elem_restoration_stats)],  # (det_cs1_acc, det_tups_acc, det_cross_ent)
                                          feed_dict={
                                              p_ids: ids_v,
                                              p_diff_ids: diff_ids_v,

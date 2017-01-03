@@ -21,21 +21,22 @@ class Model:
         # embeds symbol
         self.Coder = Model.matrix([num_symbols, code_width])
         self.EmptyCode = Model.matrix([code_width])
+        tf.summary.histogram("Coder_weights", self.Coder)
+        tf.summary.histogram("EmptyCode_weights", self.EmptyCode)
         # merges two embeddings to produce a tuple
         self.Tuple = Model.matrix([code_width * 2, code_width])
+        tf.summary.histogram("Tuple_weights", self.Tuple)
         # deconstruct tuple
         self.UnTuple = Model.matrix([code_width, code_width*2])
+        tf.summary.histogram("UnTuple_weights", self.UnTuple)
         # detects if its a symbol or a Tuple
         self.TypeDetector = Model.matrix([code_width,2])
-
+        tf.summary.histogram("TypeDetector_weights", self.TypeDetector)
         # morphisms
         self.LR = Model.matrix([code_width, code_width])
         self.RL = Model.matrix([code_width, code_width])
-
-        tf.summary.histogram("Coder_weights", self.Coder)
-        tf.summary.histogram("Tuple_weights", self.Tuple)
-        tf.summary.histogram("UnTuple_weights", self.UnTuple)
-        tf.summary.histogram("TypeDetector_weights", self.TypeDetector)
+        tf.summary.histogram("LR_weights", self.LR)
+        tf.summary.histogram("RL_weights", self.RL)
 
         self.net_saver = tf.train.Saver([self.Coder, self.Tuple, self.UnTuple])
 
