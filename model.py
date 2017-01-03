@@ -72,6 +72,25 @@ class Model:
     def right_to_left(self, c):
         return tf.matmul(c, self.RL)
 
+    def print_matrices(self, sess):
+        print('Coder:')
+        print(sess.run(self.Coder))
+
+        print('Tuple:')
+        print(sess.run(self.Tuple))
+
+        print('UnTuple:')
+        print(sess.run(self.UnTuple))
+
+        print('EmptyCode')
+        print(sess.run(self.EmptyCode))
+
+        print('LR')
+        print(sess.run(self.LR))
+
+        print('RL')
+        print(sess.run(self.RL))
+
     @staticmethod
     def matrix(shape):
         return tf.Variable(tf.truncated_normal(shape, stddev=0.1))

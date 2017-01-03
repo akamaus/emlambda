@@ -15,7 +15,7 @@ tf.app.flags.DEFINE_integer('batch_size', 50, 'Number of examples in mini-batch'
 
 tf.app.flags.DEFINE_integer('num_symbols', 10, 'Atomic symbols number')
 tf.app.flags.DEFINE_integer('code_width', 5, 'Number of embedding dimensions')
-tf.app.flags.DEFINE_integer('seq_len', 3, 'Maximal length of symbol sequences to learn')
+tf.app.flags.DEFINE_integer('seq_len', 2, 'Maximal length of symbol sequences to learn')
 
 # Model
 model = Model(num_symbols=FLAGS.num_symbols, code_width=FLAGS.code_width)
@@ -136,11 +136,11 @@ def do_train():
         seq_max = tf.sqrt(tf.reduce_max(seq_sqr_dist))
         tf.summary.scalar('seq_max' + params['suffix'], seq_max)
         tf.summary.scalar('tup_max' + params['suffix'], tup_max)
-        return code, seq_max, tup_max, seq_loss, tup_loss, seqs, rev_seqs
+        return code, seq_max, tup_max, seq_loss, tup_loss, rev_seqs
 
     # Folds
-    code_l, seq_max_l, tup_max_l, seq_loss_l, tup_loss_l, seqs, rev_seqs = learn_fold('Left')
-    code_r, seq_max_r, tup_max_r, seq_loss_r, tup_loss_r, _, _ = learn_fold('Right')
+    code_l, seq_max_l, tup_max_l, seq_loss_l, tup_loss_l, rev_seqs_l = learn_fold('Left')
+    code_r, seq_max_r, tup_max_r, seq_loss_r, tup_loss_r, _ = learn_fold('Right')
 
     # Left-to right morphism
     code_lr = model.left_to_right(code_l)
@@ -175,7 +175,7 @@ def do_train():
         return ids
 
     orig_ids = codes_to_ids(seqs)
-    rev_ids = codes_to_ids(rev_seqs)
+    rev_ids = codes_to_ids(rev_seqs_l)
 
     restorations = tf.equal(orig_ids, rev_ids)
     num_restored = tf.reduce_sum(tf.cast(restorations, dtype=tf.float32), 0)
@@ -234,7 +234,9 @@ def do_train():
 
             if i % 1000 == 0:
                 model.net_saver.save(sess, "checkpoints/" + experiment_date, global_step=k)
-        model.net_saver.save(sess, "checkpoints/" + experiment_date, global_step=k)
+
+            if i % 5000 == 0:
+                model.print_matrices(sess)
 
 
 ntop = 5
