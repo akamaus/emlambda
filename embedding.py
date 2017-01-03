@@ -118,22 +118,35 @@ def learn_coder(p_diff_ids):
         return code_loss, code_min
 
 
-def learn_fold(seqs, direction):
-    """Subgraph for learning folds"""
-    with tf.name_scope('learn_fold') as scope:
+def learn_tuple(seqs):
+    """Subgraph for learning tuple/untuple modules"""
+    with tf.name_scope('learn_tuple'):
         seq_list = tf.unpack(seqs)
+        tup_codes = model.tuple(seq_list[0], seq_list[1])
+        rev_seqs = model.untuple(tup_codes)
+        tuple_sqr_dist = tf.squared_difference(seqs, rev_seqs)
+        tuple_loss = tf.reduce_mean(tuple_sqr_dist)
+        tf.summary.scalar('tuple_loss', tuple_loss)
+        tuple_max = tf.sqrt(tf.reduce_max(tuple_sqr_dist))
+        tf.summary.scalar('tuple_max', tuple_max)
+        return tuple_loss, tuple_max, rev_seqs
 
-        if direction == 'Left':
+
+def learn_fold(seqs, assoc):
+    """Subgraph for learning folds consisting of repeating tuple applications (left or right associativity)"""
+    with tf.name_scope('learn_fold') as scope:
+        if assoc == 'Left':
             params = {'coder': seq_coder_l,
                       'decoder': seq_decoder_l,
                       'suffix': '_l'}
-        elif direction == 'Right':
+        elif assoc == 'Right':
             params = {'coder': seq_coder_r,
                       'decoder': seq_decoder_r,
                       'suffix': '_r'}
         else:
             raise Exception('unknown dir')
 
+        seq_list = tf.unpack(seqs)
         code, tup_codes = params['coder'](seq_list)
         rev_seqs, rev_tup_codes = params['decoder'](code, FLAGS.seq_len)
         seq_sqr_dist = tf.squared_difference(seqs, rev_seqs)
@@ -203,6 +216,9 @@ def do_train():
     p_diff_ids = tf.placeholder(f32, [None, pair_sz, model.sym_width], name='diff_ids')
     code_loss, code_min = learn_coder(p_diff_ids)
 
+    # Tuple/Untuple
+    tuple_loss, tuple_max, rev_seqs = learn_tuple(seqs)
+
     # Folds
     code_l, seq_max_l, tup_max_l, seq_loss_l, tup_loss_l, rev_seqs_l = learn_fold(seqs, 'Left')
     code_r, seq_max_r, tup_max_r, seq_loss_r, tup_loss_r, _ = learn_fold(seqs, 'Right')
@@ -212,10 +228,12 @@ def do_train():
 
     # restoration accuracy
     p_all_ids = tf.placeholder(f32, [model.sym_width, model.num_syms], name='all_ids')
-    elem_restoration_stats, num_proper_restorations_hist = restoration_precision(seqs, rev_seqs_l, p_all_ids)
+    elem_restoration_stats, num_proper_restorations_hist = restoration_precision(seqs, rev_seqs, p_all_ids) # rev_seqs_l for folds
 
-    # final loss, step and loop
-    full_loss = seq_loss_l + tup_loss_l + seq_loss_r + tup_loss_r + code_loss + code_dist_lr_loss + code_dist_rl_loss  #+ det_cross_ent
+    # loss for folds
+    # full_loss = seq_loss_l + tup_loss_l + seq_loss_r + tup_loss_r + code_loss + code_dist_lr_loss + code_dist_rl_loss  #+ det_cross_ent
+    # loss for tuple/untuple
+    full_loss = tuple_loss + code_loss
     step = tf.train.MomentumOptimizer(0.01, 0.5).minimize(full_loss)
 
     experiment_date = experiment + "-" + strftime("%Y-%m-%d-%H%M%S", localtime())
@@ -235,9 +253,12 @@ def do_train():
             ids_v = sym_list_batch(FLAGS.seq_len, FLAGS.batch_size, False)
             diff_ids_v = sym_list_batch(pair_sz, model.num_syms, True)
 
-            _, bin_logs, logs, restoration_stats = sess.run([step, summaries,
-            ((seq_max_l, tup_max_l, code_min), (seq_max_r, tup_max_r),
-             (seq_loss_l, tup_loss_l, code_loss, code_dist_lr_loss, code_dist_rl_loss)),
+  #          stats = ((seq_max_l, tup_max_l, code_min), (seq_max_r, tup_max_r),
+  #           (seq_loss_l, tup_loss_l, code_loss, code_dist_lr_loss, code_dist_rl_loss))
+
+            stats = ((tuple_loss, tuple_max, code_min),)
+
+            _, bin_summary, logs, restoration_stats = sess.run([step, summaries, stats,
              (num_proper_restorations_hist, elem_restoration_stats)],  # (det_cs1_acc, det_tups_acc, det_cross_ent)
                                          feed_dict={
                                              p_ids: ids_v,
@@ -256,7 +277,7 @@ def do_train():
                 break
 
             if i % 100 == 0:
-                writer.add_summary(bin_logs, i)
+                writer.add_summary(bin_summary, i)
                 print(i, list(restoration_stats[0]), list(restoration_stats[1]), logs)
 
             if i % 1000 == 0:
