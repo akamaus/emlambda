@@ -237,57 +237,6 @@ def do_train():
         model.net_saver.save(sess, "checkpoints/" + experiment_date, global_step=k)
 
 
-def rest():
-    cs = tf.matmul(model.Coder, tf.reshape(ids, [model.sym_width, -1] ))
-    cs_lst = tf.split(1, 2, cs)
-    print(tf.shape(ids))
-    print(tf.shape(cs))
-    print(tf.shape(cs_lst[0]))
-
-    tups = tf.matmul(model.Tuple, tf.concat(0,cs_lst))
-
-    cs1_rev = tf.matmul(model.UnTuple1,tups)
-    cs2_rev = tf.matmul(model.UnTuple2,tups)
-
-    cs1_sd = tf.reduce_sum(tf.squared_difference(cs_lst[0],cs1_rev),0)
-    cs2_sd = tf.reduce_sum(tf.squared_difference(cs_lst[1],cs2_rev),0)
-
-    cs1_loss = tf.reduce_mean(cs1_sd)
-    cs2_loss = tf.reduce_mean(cs2_sd)
-    tf.summary.scalar('cs1_loss', cs1_loss)
-    tf.summary.scalar('cs2_loss', cs2_loss)
-    cs1_max = tf.sqrt(tf.reduce_max(cs1_sd))
-    cs2_max = tf.sqrt(tf.reduce_max(cs2_sd))
-    tf.summary.scalar('cs1_loss_max', cs1_max)
-    tf.summary.scalar('cs2_loss_max', cs2_max)
-
-    # for detector
-    det_cs1 = tf.transpose(tf.nn.softmax(tf.transpose(tf.matmul(model.TypeDetector, cs_lst[0]))))
-    det_tups = tf.transpose(tf.nn.softmax(tf.transpose(tf.matmul(model.TypeDetector, tups))))
-
-    det_cross_ent = tf.reduce_mean( - tf.reduce_sum([[1],[0]] * tf.log(det_cs1), reduction_indices=0)) + tf.reduce_mean( - tf.reduce_sum([[0],[1]] * tf.log(det_tups), reduction_indices=0))
-    tf.summary.scalar('det_cross_ent', det_cross_ent)
-    det_cs1_max = tf.reduce_sum(tf.argmax(det_cs1,0))
-    det_tups_max = tf.reduce_sum(tf.argmax(det_tups,0))
-    det_cs1_acc = (batch_size - det_cs1_max) / batch_size
-    det_tups_acc = (det_tups_max) / batch_size
-    tf.summary.scalar('det_cs_acc', det_cs1_acc)
-    tf.summary.scalar('det_tups_acc', det_tups_acc)
-
-    # for coding
-    diff_ids1 = tf.placeholder(f32, [model.sym_width, None])
-    diff_ids2 = tf.placeholder(f32, [model.sym_width, None])
-
-    c1 = tf.matmul(model.Coder, diff_ids1)
-    c2 = tf.matmul(model.Coder, diff_ids2)
-
-    code_sqrt = tf.sqrt(tf.reduce_sum(tf.squared_difference(c1, c2),0))
-    code_loss = tf.reduce_mean(1 / code_sqrt)
-    tf.summary.scalar('code_loss', code_loss)
-    code_min = tf.reduce_min(code_sqrt)
-    tf.summary.scalar('code_min', code_min)
-
-
 ntop = 5
 tries = 10
 def do_test(snapshot):
