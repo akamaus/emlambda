@@ -13,7 +13,7 @@ FLAGS = tf.app.flags.FLAGS
 tf.app.flags.DEFINE_integer('steps', 100000, 'Number of steps until stop')
 tf.app.flags.DEFINE_integer('batch_size', 50, 'Number of examples in mini-batch')
 
-tf.app.flags.DEFINE_integer('num_symbols', 10, 'Atomic symbols number')
+tf.app.flags.DEFINE_integer('num_symbols', 8, 'Atomic symbols number')
 tf.app.flags.DEFINE_integer('code_width', 5, 'Number of embedding dimensions')
 tf.app.flags.DEFINE_integer('seq_len', 2, 'Maximal length of symbol sequences to learn')
 
@@ -22,6 +22,7 @@ model = Model(num_symbols=FLAGS.num_symbols, code_width=FLAGS.code_width)
 
 # some constants and initialization
 f32 = tf.float32
+pair_sz = 2
 eps = 1e-6
 experiment = "exp-voc" + str(FLAGS.num_symbols) + "-code" + str(FLAGS.code_width) + "-seq" + str(FLAGS.seq_len)
 
@@ -51,22 +52,24 @@ def seq_coder_l(symbol_codes):
     """Takes list of codes representing symbol-code sequence
     folds it into a single code. Returns summary code and list of accumulated results"""
     tuples = []
-    b = tf.shape(symbol_codes[0])[0]
-    c = tf.tile(tf.expand_dims(model.empty_code(), axis=0), [b, 1])
-    for ci in symbol_codes:
-        tuples.append(c)
-        c = model.tuple(c,ci)
-    return c, tuples
+    with tf.name_scope('seq_coder_l'):
+        b = tf.shape(symbol_codes[0])[0]
+        c = tf.tile(tf.expand_dims(model.empty_code(), axis=0), [b, 1])
+        for ci in symbol_codes:
+            tuples.append(c)
+            c = model.tuple(c,ci)
+        return c, tuples
 
 
 def seq_decoder_l(seq_code, seq_length):
     """Takes a code representing symbol sequence and unfolds it"""
     tuples = []
     symbols = []
-    for i in range(seq_length):
-        seq_code,symbol = model.untuple(seq_code)
-        tuples.append(seq_code)
-        symbols.append(symbol)
+    with tf.name_scope('seq_decoder_l'):
+        for i in range(seq_length):
+            seq_code,symbol = model.untuple(seq_code)
+            tuples.append(seq_code)
+            symbols.append(symbol)
     tuples.reverse()
     symbols.reverse()
     return symbols, tuples
@@ -75,44 +78,51 @@ def seq_decoder_l(seq_code, seq_length):
 def seq_coder_r(symbol_codes):
     """Foldr. Returns summary code and list of accumulated results"""
     tuples = []
-    b = tf.shape(symbol_codes[0])[0]
-    c = tf.tile(tf.expand_dims(model.empty_code(), axis=0), [b, 1])
-    cs = list(symbol_codes)
-    cs.reverse()
-    for ci in cs:
-        tuples.append(c)
-        c = model.tuple(ci,c)
-    return c, tuples
+    with tf.name_scope('seq_coder_r'):
+        b = tf.shape(symbol_codes[0])[0]
+        c = tf.tile(tf.expand_dims(model.empty_code(), axis=0), [b, 1])
+        cs = list(symbol_codes)
+        cs.reverse()
+        for ci in cs:
+            tuples.append(c)
+            c = model.tuple(ci,c)
+        return c, tuples
 
 
 def seq_decoder_r(seq_code, seq_length):
     """Unflodr. Takes a code representing symbol sequence and unfolds it"""
     tuples = []
     symbols = []
-    for i in range(seq_length):
-        symbol, seq_code = model.untuple(seq_code)
-        tuples.append(seq_code)
-        symbols.append(symbol)
+    with tf.name_scope('seq_decoder_r'):
+        for i in range(seq_length):
+            symbol, seq_code = model.untuple(seq_code)
+            tuples.append(seq_code)
+            symbols.append(symbol)
     tuples.reverse()
     return symbols, tuples
 
 
-def do_train():
-    print('vocabulary {}, code_width {}, sequence_len {}'.format(FLAGS.num_symbols, FLAGS.code_width, FLAGS.seq_len))
+# Learners
+def learn_coder(p_diff_ids):
+    """Subgraph for learning coder"""
+    with tf.name_scope('coder_learner') as scope:
+        diff_codes = tf.reshape(model.embed(one_hot=tf.reshape(p_diff_ids, [-1, model.sym_width])),
+                                [-1, pair_sz, model.code_width])
+        diff_pairs = tf.transpose(diff_codes, perm=[1, 0, 2])
+        diff_cs = tf.unpack(diff_pairs)
+        code_dist = tf.reduce_sum(tf.squared_difference(diff_cs[0], diff_cs[1]), 1)
+        code_loss = tf.reduce_mean(1 / code_dist)
+        tf.summary.scalar('code_loss', code_loss)
+        code_min = tf.reduce_min(code_dist)
+        tf.summary.scalar('code_min', code_min)
+        return code_loss, code_min
 
-    ensure_dir('checkpoints')
-    ensure_dir('logs')
 
-    # training equations (for tuple)
-    p_ids = tf.placeholder(f32, [None, FLAGS.seq_len, model.sym_width])  # Batch x Seq x SymWidth
-    ids_2d = tf.reshape(p_ids, [-1, model.sym_width])
-    sym_codes = tf.reshape(model.embed(ids_2d), [-1, FLAGS.seq_len, model.code_width])  # Batch x Seq x Code
+def learn_fold(seqs, direction):
+    """Subgraph for learning folds"""
+    with tf.name_scope('learn_fold') as scope:
+        seq_list = tf.unpack(seqs)
 
-    # Left fold
-    seqs = tf.transpose(sym_codes, perm=[1, 0, 2])  # Seq x Batch x Code
-    seq_list = tf.unpack(seqs)
-
-    def learn_fold(direction):
         if direction == 'Left':
             params = {'coder': seq_coder_l,
                       'decoder': seq_decoder_l,
@@ -121,7 +131,7 @@ def do_train():
             params = {'coder': seq_coder_r,
                       'decoder': seq_decoder_r,
                       'suffix': '_r'}
-        else: 
+        else:
             raise Exception('unknown dir')
 
         code, tup_codes = params['coder'](seq_list)
@@ -138,57 +148,74 @@ def do_train():
         tf.summary.scalar('tup_max' + params['suffix'], tup_max)
         return code, seq_max, tup_max, seq_loss, tup_loss, rev_seqs
 
-    # Folds
-    code_l, seq_max_l, tup_max_l, seq_loss_l, tup_loss_l, rev_seqs_l = learn_fold('Left')
-    code_r, seq_max_r, tup_max_r, seq_loss_r, tup_loss_r, _ = learn_fold('Right')
 
-    # Left-to right morphism
-    code_lr = model.left_to_right(code_l)
-    code_rl = model.right_to_left(code_r)
+def learn_morphisms(code_l, code_r):
+    """Subgraph for learning morphisms"""
+    with tf.name_scope('learn_morphisms'):
+        code_lr = model.left_to_right(code_l)
+        code_rl = model.right_to_left(code_r)
 
-    code_dist_lr_loss = tf.reduce_mean(tf.squared_difference(code_lr, code_r))
-    code_dist_rl_loss = tf.reduce_mean(tf.squared_difference(code_rl, code_l))
-    tf.summary.scalar('code_dist_lr', code_dist_lr_loss)
-    tf.summary.scalar('code_dist_rl', code_dist_rl_loss)
+        code_dist_lr_loss = tf.reduce_mean(tf.squared_difference(code_lr, code_r))
+        code_dist_rl_loss = tf.reduce_mean(tf.squared_difference(code_rl, code_l))
+        tf.summary.scalar('code_dist_lr', code_dist_lr_loss)
+        tf.summary.scalar('code_dist_rl', code_dist_rl_loss)
+        return code_dist_lr_loss, code_dist_rl_loss
+
+
+def restoration_precision(seqs, rev_seqs, p_all_ids):
+    """Subgraph for restoration stats for symbols"""
+    with tf.name_scope('restoration_stats'):
+        all_codes = model.embed(p_all_ids)
+
+        def codes_to_ids(codes):
+            codes_1 = tf.expand_dims(codes, 2)
+            dists = tf.reduce_sum(tf.squared_difference(codes_1, all_codes), 3)
+            ids = tf.arg_min(dists, 2)
+            return ids
+
+        orig_ids = codes_to_ids(seqs)
+        rev_ids = codes_to_ids(rev_seqs)
+
+        restorations = tf.equal(orig_ids, rev_ids)
+        num_restored = tf.reduce_sum(tf.cast(restorations, dtype=tf.float32), 0)
+        # stats[i] is number of sequences with i-th element restored
+        elem_restoration_stats = tf.reduce_sum(tf.cast(restorations, dtype=tf.int32), 1)
+        # hist[i] - is number of sequences with i properly restored elements
+        num_proper_restorations_hist = tf.histogram_fixed_width(num_restored,
+                                                    [0.0, FLAGS.seq_len+1.0], FLAGS.seq_len+1, dtype=tf.int32)
+
+        tf.summary.histogram('num_restored', num_restored)
+        return elem_restoration_stats, num_proper_restorations_hist
+
+
+def do_train():
+    print('vocabulary {}, code_width {}, sequence_len {}'.format(FLAGS.num_symbols, FLAGS.code_width, FLAGS.seq_len))
+
+    ensure_dir('checkpoints')
+    ensure_dir('logs')
+
+    p_ids = tf.placeholder(f32, [None, FLAGS.seq_len, model.sym_width], name='ids')  # Batch x Seq x SymWidth
+    ids_2d = tf.reshape(p_ids, [-1, model.sym_width])
+    sym_codes = tf.reshape(model.embed(ids_2d), [-1, FLAGS.seq_len, model.code_width])  # Batch x Seq x Code
+    seqs = tf.transpose(sym_codes, perm=[1, 0, 2])  # Seq x Batch x Code
 
     # for coder
-    pair_sz = 2
-    p_diff_ids = tf.placeholder(f32, [None, pair_sz, model.sym_width])
-    diff_codes = tf.reshape(model.embed(one_hot=tf.reshape(p_diff_ids, [-1, model.sym_width])),
-                            [-1, pair_sz, model.code_width])
-    diff_pairs = tf.transpose(diff_codes, perm=[1, 0, 2])
-    diff_cs = tf.unpack(diff_pairs)
-    code_dist = tf.reduce_sum(tf.squared_difference(diff_cs[0], diff_cs[1]), 1)
-    code_loss = tf.reduce_mean(1 / code_dist)
-    tf.summary.scalar('code_loss', code_loss)
-    code_min = tf.reduce_min(code_dist)
-    tf.summary.scalar('code_min', code_min)
+    p_diff_ids = tf.placeholder(f32, [None, pair_sz, model.sym_width], name='diff_ids')
+    code_loss, code_min = learn_coder(p_diff_ids)
+
+    # Folds
+    code_l, seq_max_l, tup_max_l, seq_loss_l, tup_loss_l, rev_seqs_l = learn_fold(seqs, 'Left')
+    code_r, seq_max_r, tup_max_r, seq_loss_r, tup_loss_r, _ = learn_fold(seqs, 'Right')
+
+    # Left-to right morphism
+    code_dist_lr_loss, code_dist_rl_loss = learn_morphisms(code_l, code_r)
 
     # restoration accuracy
-    p_all_ids = tf.placeholder(f32, [model.sym_width, model.num_syms])
-    all_codes = model.embed(p_all_ids)
-
-    def codes_to_ids(codes):
-        codes_1 = tf.expand_dims(codes, 2)
-        dists = tf.reduce_sum(tf.squared_difference(codes_1, all_codes), 3)
-        ids = tf.arg_min(dists, 2)
-        return ids
-
-    orig_ids = codes_to_ids(seqs)
-    rev_ids = codes_to_ids(rev_seqs_l)
-
-    restorations = tf.equal(orig_ids, rev_ids)
-    num_restored = tf.reduce_sum(tf.cast(restorations, dtype=tf.float32), 0)
-    # stats[i] is number of sequences with i-th element restored
-    elem_restoration_stats = tf.reduce_sum(tf.cast(restorations, dtype=tf.int32), 1)
-    # hist[i] - is number of sequences with i properly restored elements
-    num_proper_restorations_hist = tf.histogram_fixed_width(num_restored,
-                                                [0.0, FLAGS.seq_len+1.0], FLAGS.seq_len+1, dtype=tf.int32)
-
-    tf.summary.histogram('num_restored', num_restored)
+    p_all_ids = tf.placeholder(f32, [model.sym_width, model.num_syms], name='all_ids')
+    elem_restoration_stats, num_proper_restorations_hist = restoration_precision(seqs, rev_seqs_l, p_all_ids)
 
     # final loss, step and loop
-    full_loss = seq_loss_l + tup_loss_l + seq_loss_r + tup_loss_r + code_loss + code_dist_lr_loss + code_dist_rl_loss  ##+ det_cross_ent
+    full_loss = seq_loss_l + tup_loss_l + seq_loss_r + tup_loss_r + code_loss + code_dist_lr_loss + code_dist_rl_loss  #+ det_cross_ent
     step = tf.train.MomentumOptimizer(0.01, 0.5).minimize(full_loss)
 
     experiment_date = experiment + "-" + strftime("%Y-%m-%d-%H%M%S", localtime())

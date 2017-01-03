@@ -19,22 +19,22 @@ class Model:
             self.sym_dict[c][i] = 1
 
         # embeds symbol
-        self.Coder = Model.matrix([num_symbols, code_width])
-        self.EmptyCode = Model.matrix([code_width])
+        self.Coder = Model.matrix([num_symbols, code_width], 'Coder')
+        self.EmptyCode = Model.matrix([code_width], 'EmptyCode')
         tf.summary.histogram("Coder_weights", self.Coder)
         tf.summary.histogram("EmptyCode_weights", self.EmptyCode)
         # merges two embeddings to produce a tuple
-        self.Tuple = Model.matrix([code_width * 2, code_width])
+        self.Tuple = Model.matrix([code_width * 2, code_width], 'Tuple')
         tf.summary.histogram("Tuple_weights", self.Tuple)
         # deconstruct tuple
-        self.UnTuple = Model.matrix([code_width, code_width*2])
+        self.UnTuple = Model.matrix([code_width, code_width*2], 'UnTuple')
         tf.summary.histogram("UnTuple_weights", self.UnTuple)
         # detects if its a symbol or a Tuple
-        self.TypeDetector = Model.matrix([code_width,2])
+        self.TypeDetector = Model.matrix([code_width,2], 'TypeDetector')
         tf.summary.histogram("TypeDetector_weights", self.TypeDetector)
         # morphisms
-        self.LR = Model.matrix([code_width, code_width])
-        self.RL = Model.matrix([code_width, code_width])
+        self.LR = Model.matrix([code_width, code_width], 'LR')
+        self.RL = Model.matrix([code_width, code_width], 'RL')
         tf.summary.histogram("LR_weights", self.LR)
         tf.summary.histogram("RL_weights", self.RL)
 
@@ -92,5 +92,5 @@ class Model:
         print(sess.run(self.RL))
 
     @staticmethod
-    def matrix(shape):
-        return tf.Variable(tf.truncated_normal(shape, stddev=0.1))
+    def matrix(shape, name = None):
+        return tf.Variable(tf.truncated_normal(shape, stddev=0.1), name=name)
