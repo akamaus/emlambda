@@ -3,7 +3,6 @@ from time import localtime, strftime
 
 import os
 import tensorflow as tf
-import numpy as np
 import random
 
 from model import Model
@@ -279,6 +278,7 @@ def do_train():
             if i % 100 == 0:
                 writer.add_summary(bin_summary, i)
                 print(i, list(restoration_stats[0]), list(restoration_stats[1]), logs)
+                model.draw_matrices(sess)
 
             if i % 1000 == 0:
                 model.net_saver.save(sess, "checkpoints/" + experiment_date, global_step=k)

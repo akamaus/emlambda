@@ -1,6 +1,6 @@
 import tensorflow as tf
 import numpy as np
-
+import matplotlib.pyplot as plt
 
 class Model:
     """A model for learning symbol-hierarchy embedding.
@@ -40,6 +40,11 @@ class Model:
 
         self.net_saver = tf.train.Saver([self.Coder, self.Tuple, self.UnTuple])
 
+        plt.ion()
+        self.fig = plt.figure()
+        self.ax = self.fig.add_subplot(1, 1, 1)
+        self.first_draw = True
+
     def one_hot(self, symbols):
         """one-hot encoding of symbol or list of symbols"""
         if type(symbols) is int:
@@ -71,6 +76,22 @@ class Model:
 
     def right_to_left(self, c):
         return tf.matmul(c, self.RL)
+
+    def draw_matrices(self, sess):
+        coder = sess.run(self.Coder)
+        xs = coder[:, 0]
+        ys = coder[:, 1]
+
+        if self.first_draw:
+            self.plot,  = self.ax.plot(xs, ys, '+')
+            self.first_draw = False
+#            self.fig.show()
+        else:
+            self.plot.set_xdata(xs)
+            self.plot.set_ydata(ys)
+            self.ax.relim()
+            self.ax.autoscale_view()
+            self.fig.canvas.draw()
 
     def print_matrices(self, sess):
         print('Coder:')
