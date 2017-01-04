@@ -77,20 +77,33 @@ class Model:
     def right_to_left(self, c):
         return tf.matmul(c, self.RL)
 
-    def draw_matrices(self, sess):
-        coder = sess.run(self.Coder)
-        xs = coder[:, 0]
-        ys = coder[:, 1]
+    def draw_matrices(self, vis_data):
+        xs = vis_data['coder'][:, 0]
+        ys = vis_data['coder'][:, 1]
 
+        rev_xs = vis_data['rev_seqs'][0][:, 0]
+        rev_ys = vis_data['rev_seqs'][0][:, 1]
+
+        tup_xs = vis_data['tuple_codes'][:, 0]
+        tup_ys = vis_data['tuple_codes'][:, 1]
+
+        s = 20
         if self.first_draw:
-            self.plot,  = self.ax.plot(xs, ys, '+')
+            self.seqs_plot, self.rev_plot, self.tuple_plot = self.ax.plot(xs, ys, '+', rev_xs, rev_ys, 'go', tup_xs, tup_ys, 'rp')
+            self.ax.set_xlim(-s, s)
+            self.ax.set_ylim(-s, s)
             self.first_draw = False
 #            self.fig.show()
         else:
-            self.plot.set_xdata(xs)
-            self.plot.set_ydata(ys)
-            self.ax.relim()
-            self.ax.autoscale_view()
+            self.seqs_plot.set_xdata(xs)
+            self.seqs_plot.set_ydata(ys)
+            self.rev_plot.set_xdata(rev_xs)
+            self.rev_plot.set_ydata(rev_ys)
+            self.tuple_plot.set_xdata(tup_xs)
+            self.tuple_plot.set_ydata(tup_ys)
+
+            #self.ax.relim()
+            #self.ax.autoscale_view()
             self.fig.canvas.draw()
 
     def print_matrices(self, sess):

@@ -128,7 +128,7 @@ def learn_tuple(seqs):
         tf.summary.scalar('tuple_loss', tuple_loss)
         tuple_max = tf.sqrt(tf.reduce_max(tuple_sqr_dist))
         tf.summary.scalar('tuple_max', tuple_max)
-        return tuple_loss, tuple_max, rev_seqs
+        return tuple_loss, tuple_max, tup_codes, rev_seqs
 
 
 def learn_fold(seqs, assoc):
@@ -200,6 +200,15 @@ def restoration_precision(seqs, rev_seqs, p_all_ids):
         return elem_restoration_stats, num_proper_restorations_hist
 
 
+def vis_tuple(seqs):
+    """Subgraph for visualizing tuples and restored symbols"""
+    with tf.name_scope('vis_tuple'):
+        seq_list = tf.unpack(seqs)
+        tup_codes = model.tuple(seq_list[0], seq_list[1])
+        rev_seqs = model.untuple(tup_codes)
+        return tup_codes, rev_seqs
+
+
 def do_train():
     print('vocabulary {}, code_width {}, sequence_len {}'.format(FLAGS.num_symbols, FLAGS.code_width, FLAGS.seq_len))
 
@@ -216,7 +225,7 @@ def do_train():
     code_loss, code_min = learn_coder(p_diff_ids)
 
     # Tuple/Untuple
-    tuple_loss, tuple_max, rev_seqs = learn_tuple(seqs)
+    tuple_loss, tuple_max, tuple_codes, rev_seqs = learn_tuple(seqs)
 
     # Folds
     code_l, seq_max_l, tup_max_l, seq_loss_l, tup_loss_l, rev_seqs_l = learn_fold(seqs, 'Left')
@@ -235,6 +244,16 @@ def do_train():
     full_loss = tuple_loss + code_loss
     step = tf.train.MomentumOptimizer(0.01, 0.5).minimize(full_loss)
 
+    # Visualization
+    all_codes = model.embed(p_all_ids)
+    nc = tf.shape(all_codes)[0]
+    all_code_stacks_1 = tf.reshape(tf.tile(all_codes, [nc, 1]), [nc, nc, -1])
+    all_code_stacks_2 = tf.transpose(all_code_stacks_1, perm=[1, 0, 2])
+    all_code_pairs_1 = tf.reshape(all_code_stacks_1, [nc * nc, -1])
+    all_code_pairs_2 = tf.reshape(all_code_stacks_2, [nc * nc, -1])
+    all_code_pairs = tf.stack([all_code_pairs_1, all_code_pairs_2])
+    all_tuples, all_rev_sym = vis_tuple(all_code_pairs)
+
     experiment_date = experiment + "-" + strftime("%Y-%m-%d-%H%M%S", localtime())
     writer = tf.summary.FileWriter("logs/" + experiment_date, flush_secs=5)
     summaries = tf.summary.merge_all()
@@ -252,13 +271,16 @@ def do_train():
             ids_v = sym_list_batch(FLAGS.seq_len, FLAGS.batch_size, False)
             diff_ids_v = sym_list_batch(pair_sz, model.num_syms, True)
 
-  #          stats = ((seq_max_l, tup_max_l, code_min), (seq_max_r, tup_max_r),
+  #          stats_ = ((seq_max_l, tup_max_l, code_min), (seq_max_r, tup_max_r),
   #           (seq_loss_l, tup_loss_l, code_loss, code_dist_lr_loss, code_dist_rl_loss))
 
-            stats = ((tuple_loss, tuple_max, code_min),)
+            stats_ = ((tuple_loss, tuple_max, code_min),)
+            vis_data_ = {"coder": model.Coder, "tuple_codes": all_tuples, "rev_seqs": all_rev_sym}
 
-            _, bin_summary, logs, restoration_stats = sess.run([step, summaries, stats,
-             (num_proper_restorations_hist, elem_restoration_stats)],  # (det_cs1_acc, det_tups_acc, det_cross_ent)
+            _, bin_summary, logs, restoration_stats, vis_data = \
+                sess.run([step, summaries, stats_,
+                          (num_proper_restorations_hist, elem_restoration_stats),
+                          vis_data_],  # (det_cs1_acc, det_tups_acc, det_cross_ent)
                                          feed_dict={
                                              p_ids: ids_v,
                                              p_diff_ids: diff_ids_v,
@@ -278,7 +300,7 @@ def do_train():
             if i % 100 == 0:
                 writer.add_summary(bin_summary, i)
                 print(i, list(restoration_stats[0]), list(restoration_stats[1]), logs)
-                model.draw_matrices(sess)
+                model.draw_matrices(vis_data)
 
             if i % 1000 == 0:
                 model.net_saver.save(sess, "checkpoints/" + experiment_date, global_step=k)
