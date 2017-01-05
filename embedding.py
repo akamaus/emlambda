@@ -291,7 +291,7 @@ def do_train():
   #           (seq_loss_l, tup_loss_l, code_loss, code_dist_lr_loss, code_dist_rl_loss))
 
             logs_ = ((tuple_loss, tuple_max), (code_min,), (type_det_loss, type_det_prec))
-            vis_data_ = {"coder": model.Coder, "tuple_codes": all_tuples, "rev_seqs": all_rev_sym}
+            vis_data_ = {"coder": model.Coder.parameters(), "tuple_codes": all_tuples, "rev_seqs": all_rev_sym}
 
             _, bin_summary, logs, restoration_stats, vis_data = \
                 sess.run([step, summaries, logs_,
