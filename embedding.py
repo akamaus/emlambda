@@ -174,11 +174,9 @@ def learn_morphisms(code_l, code_r):
         return code_dist_lr_loss, code_dist_rl_loss
 
 
-def restoration_precision(seqs, rev_seqs, p_all_ids):
+def restoration_precision(seqs, rev_seqs, all_codes):
     """Subgraph for restoration stats for symbols"""
     with tf.name_scope('restoration_stats'):
-        all_codes = model.embed(p_all_ids)
-
         def codes_to_ids(codes):
             codes_1 = tf.expand_dims(codes, 2)
             dists = tf.reduce_sum(tf.squared_difference(codes_1, all_codes), 3)
@@ -209,6 +207,20 @@ def vis_tuple(seqs):
         return tup_codes, rev_seqs
 
 
+def learn_type_detector(codes, tuples):
+    """Subgraph for type detector learning"""
+    code_labels = tf.tile(tf.constant([0], dtype=tf.int64), [tf.shape(codes)[0]])
+    tuple_labels = tf.tile(tf.constant([1], dtype=tf.int64), [tf.shape(tuples)[0]])
+    labels = tf.concat(0, [code_labels, tuple_labels])
+    one_hot_labels = tf.one_hot(labels, 2)
+
+    data = tf.concat(0, [codes, tuples])
+    logits = model.type_detector(data)
+    loss = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(logits, one_hot_labels))
+    prec = tf.reduce_mean(tf.cast(tf.equal(tf.arg_max(logits, 1), labels), dtype=f32))
+    return loss, prec
+
+
 def do_train():
     print('vocabulary {}, code_width {}, sequence_len {}'.format(FLAGS.num_symbols, FLAGS.code_width, FLAGS.seq_len))
 
@@ -236,16 +248,11 @@ def do_train():
 
     # restoration accuracy
     p_all_ids = tf.placeholder(f32, [model.sym_width, model.num_syms], name='all_ids')
-    elem_restoration_stats, num_proper_restorations_hist = restoration_precision(seqs, rev_seqs, p_all_ids) # rev_seqs_l for folds
+    all_codes = model.embed(p_all_ids)
 
-    # loss for folds
-    # full_loss = seq_loss_l + tup_loss_l + seq_loss_r + tup_loss_r + code_loss + code_dist_lr_loss + code_dist_rl_loss  #+ det_cross_ent
-    # loss for tuple/untuple
-    full_loss = tuple_loss + code_loss
-    step = tf.train.MomentumOptimizer(0.01, 0.5).minimize(full_loss)
+    elem_restoration_stats, num_proper_restorations_hist = restoration_precision(seqs, rev_seqs, all_codes) # rev_seqs_l for folds
 
     # Visualization
-    all_codes = model.embed(p_all_ids)
     nc = tf.shape(all_codes)[0]
     all_code_stacks_1 = tf.reshape(tf.tile(all_codes, [nc, 1]), [nc, nc, -1])
     all_code_stacks_2 = tf.transpose(all_code_stacks_1, perm=[1, 0, 2])
@@ -253,6 +260,15 @@ def do_train():
     all_code_pairs_2 = tf.reshape(all_code_stacks_2, [nc * nc, -1])
     all_code_pairs = tf.stack([all_code_pairs_1, all_code_pairs_2])
     all_tuples, all_rev_sym = vis_tuple(all_code_pairs)
+
+    # Type Detector
+    type_det_loss, type_det_prec = learn_type_detector(all_codes, all_tuples)
+
+    # loss for folds
+    # full_loss = seq_loss_l + tup_loss_l + seq_loss_r + tup_loss_r + code_loss + code_dist_lr_loss + code_dist_rl_loss  #+ det_cross_ent
+    # loss for tuple/untuple
+    full_loss = tuple_loss + code_loss + type_det_loss
+    step = tf.train.MomentumOptimizer(0.01, 0.5).minimize(full_loss)
 
     experiment_date = experiment + "-" + strftime("%Y-%m-%d-%H%M%S", localtime())
     writer = tf.summary.FileWriter("logs/" + experiment_date, flush_secs=5)
@@ -271,14 +287,14 @@ def do_train():
             ids_v = sym_list_batch(FLAGS.seq_len, FLAGS.batch_size, False)
             diff_ids_v = sym_list_batch(pair_sz, model.num_syms, True)
 
-  #          stats_ = ((seq_max_l, tup_max_l, code_min), (seq_max_r, tup_max_r),
+  #          logs_ = ((seq_max_l, tup_max_l, code_min), (seq_max_r, tup_max_r),
   #           (seq_loss_l, tup_loss_l, code_loss, code_dist_lr_loss, code_dist_rl_loss))
 
-            stats_ = ((tuple_loss, tuple_max, code_min),)
+            logs_ = ((tuple_loss, tuple_max), (code_min,), (type_det_loss, type_det_prec))
             vis_data_ = {"coder": model.Coder, "tuple_codes": all_tuples, "rev_seqs": all_rev_sym}
 
             _, bin_summary, logs, restoration_stats, vis_data = \
-                sess.run([step, summaries, stats_,
+                sess.run([step, summaries, logs_,
                           (num_proper_restorations_hist, elem_restoration_stats),
                           vis_data_],  # (det_cs1_acc, det_tups_acc, det_cross_ent)
                                          feed_dict={
@@ -286,14 +302,14 @@ def do_train():
                                              p_diff_ids: diff_ids_v,
                                              p_all_ids: all_ids_v
                                          })
-            mlogs = logs[0]
+            tuple_logs, coder_logs, type_det_logs = logs
 
             if restoration_stats[0][FLAGS.seq_len] == FLAGS.batch_size:
                 all_perfect += 1
             else:
                 all_perfect = 0
 
-            if mlogs[0] < eps and mlogs[1] < eps and mlogs[2] > 0.5 or all_perfect >= 10000:
+            if tuple_logs[0] < eps and coder_logs[0] > 0.5 and type_det_logs[1] > 0.99 : # or all_perfect >= 10000:
                 print("early stopping")
                 break
 

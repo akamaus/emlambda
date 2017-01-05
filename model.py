@@ -30,7 +30,7 @@ class Model:
         self.UnTuple = Model.matrix([code_width, code_width*2], 'UnTuple')
         tf.summary.histogram("UnTuple_weights", self.UnTuple)
         # detects if its a symbol or a Tuple
-        self.TypeDetector = Model.matrix([code_width,2], 'TypeDetector')
+        self.TypeDetector = Model.matrix([code_width, 2], 'TypeDetector')
         tf.summary.histogram("TypeDetector_weights", self.TypeDetector)
         # morphisms
         self.LR = Model.matrix([code_width, code_width], 'LR')
@@ -57,6 +57,9 @@ class Model:
     def embed(self, one_hot):
         """Embeds a symbol (or list of symbols) into vector-space"""
         return tf.matmul(one_hot, self.Coder)
+
+    def type_detector(self, codes):
+        return tf.matmul(codes, self.TypeDetector)
 
     def empty_code(self):
         """Returns a code for empty symbol"""
