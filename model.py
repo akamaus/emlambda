@@ -14,6 +14,20 @@ class Linear:
     def parameters(self):
         return {'weights': self.weights}
 
+class Affine:
+        def __init__(self, inp_size, out_size, name=None):
+            self.weights = tf.Variable(tf.truncated_normal([inp_size, out_size], stddev=1), name=name + "_weights")
+            self.biases = tf.Variable(tf.truncated_normal([out_size], stddev=1), name=name + "_biases")
+            tf.summary.histogram(name + '_weights', self.weights)
+            tf.summary.histogram(name + '_biases', self.biases)
+
+        def apply(self, inp):
+            return tf.matmul(inp, self.weights) + self.biases
+
+        def parameters(self):
+            return {'weights': self.weights, 'biases': self.biases}
+
+
 class Model:
     """A model for learning symbol-hierarchy embedding.
     Symbols initially represented as one-hot rows (of size sym_width)
@@ -37,11 +51,11 @@ class Model:
         # embeds symbol
         self.Coder = Linear(num_symbols, code_width, 'Coder')
         # merges two embeddings to produce a tuple
-        self.Tuple = Linear(code_width * 2, code_width, 'Tuple')
+        self.Tuple = Affine(code_width * 2, code_width, 'Tuple')
         # deconstruct tuple
-        self.UnTuple = Linear(code_width, code_width*2, 'UnTuple')
+        self.UnTuple = Affine(code_width, code_width*2, 'UnTuple')
         # detects if its a symbol or a Tuple
-        self.TypeDetector = Linear(code_width, 2, 'TypeDetector')
+        self.TypeDetector = Affine(code_width, 2, 'TypeDetector')
         # morphisms
         self.LR = Linear(code_width, code_width, 'LR')
         self.RL = Linear(code_width, code_width, 'RL')

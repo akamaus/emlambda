@@ -13,7 +13,7 @@ tf.app.flags.DEFINE_integer('steps', 100000, 'Number of steps until stop')
 tf.app.flags.DEFINE_integer('batch_size', 50, 'Number of examples in mini-batch')
 
 tf.app.flags.DEFINE_integer('num_symbols', 8, 'Atomic symbols number')
-tf.app.flags.DEFINE_integer('code_width', 5, 'Number of embedding dimensions')
+tf.app.flags.DEFINE_integer('code_width', 2, 'Number of embedding dimensions')
 tf.app.flags.DEFINE_integer('seq_len', 2, 'Maximal length of symbol sequences to learn')
 
 # Model
@@ -268,7 +268,7 @@ def do_train():
     # full_loss = seq_loss_l + tup_loss_l + seq_loss_r + tup_loss_r + code_loss + code_dist_lr_loss + code_dist_rl_loss  #+ det_cross_ent
     # loss for tuple/untuple
     full_loss = tuple_loss + code_loss + type_det_loss
-    step = tf.train.MomentumOptimizer(0.01, 0.5).minimize(full_loss)
+    step = tf.train.AdamOptimizer(0.01).minimize(full_loss)
 
     experiment_date = experiment + "-" + strftime("%Y-%m-%d-%H%M%S", localtime())
     writer = tf.summary.FileWriter("logs/" + experiment_date, flush_secs=5)
@@ -329,3 +329,5 @@ do_train()
 #elif sys.argv[3] == 'test':
 #    checkpoint = sys.argv[4]
 #    do_test(checkpoint)
+
+tf.nn.conv1d()
